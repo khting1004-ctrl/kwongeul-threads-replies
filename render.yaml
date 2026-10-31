@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: kwongeul-threads-replies
+    runtime: node
+    plan: starter
+    buildCommand: echo "No external dependencies"
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: THREADS_ACCESS_TOKEN
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: DATA_DIR
+        value: /data
+      - key: POLL_SECONDS
+        value: '120'
+      - key: TRUST_PROXY
+        value: '1'
+    disk:
+      name: threads-replies-state
+      mountPath: /data
+      sizeGB: 1

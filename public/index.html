@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta name="theme-color" content="#101019"/>
+  <title>권글 BOOK LAB | Threads 이벤트 답글 관리</title>
+  <link rel="stylesheet" href="/style.css"/>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand-mark">K<span>.</span></div>
+      <p class="brand-name">KWONGEUL <b>BOOK LAB</b></p>
+      <p class="brand-caption">THREADS AUTOMATION</p>
+      <div class="side-divider"></div>
+      <div class="nav-item active"><span>◈</span> 이벤트 자동 답글</div>
+      <div class="nav-item"><span>◉</span> 발송 현황</div>
+      <div class="nav-item"><span>▤</span> 활동 내역</div>
+      <div class="side-info">
+        <span class="soft-label">OFFICIAL API</span>
+        <p>Meta Threads 공식 API 연동<br/>이벤트 대상 게시물 전용</p>
+        <p class="smallmuted">AI 답글 생성 없음 · 고정 문구 발송</p>
+      </div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <span>OPERATIONS / <b>REPLY AUTOMATION</b></span>
+        <div id="connection" class="connection">● 연결 상태 확인 중</div>
+      </header>
+      <section class="hero">
+        <div class="eyebrow">EVENT CAMPAIGN MANAGER <span class="line"></span> VER 1.4.1</div>
+        <h1>이벤트 댓글을<br/><em>신청으로 연결하세요.</em></h1>
+        <p>내가 지정한 스레드 게시물에 달린 댓글마다<br class="desktop"/> 동일한 초대 메시지를 정확하게, 한 번씩 전달합니다.</p>
+        <div class="hero-foot"><span class="glow-dot"></span> 고정 메시지 · 중복 방지 · 발송 기록</div>
+      </section>
+      <section class="stats" aria-label="발송 통계">
+        <div class="stat"><span>발송 대기</span><strong id="pendingCount">—</strong><small>아직 답글을 보내지 않은 댓글</small></div>
+        <div class="stat"><span>발송 완료</span><strong id="sentCount">—</strong><small>선택 이벤트의 누적 발송</small></div>
+        <div class="stat"><span>오늘 발송</span><strong id="todayCount">—</strong><small>0이면 프로그램 일일 제한 없음</small></div>
+        <div class="stat"><span>확인 필요</span><strong id="uncertainCount">—</strong><small>전송 상태 재확인 항목</small></div>
+      </section>
+      <section class="panel" style="margin-bottom:22px">
+        <div class="section-head"><div><div class="step">00 / API CONNECTION</div><h2>Threads 계정 연결</h2></div><button id="verifyConnection" class="secondary">계정 연결 확인</button></div>
+        <p class="detail" id="connectionGuide">게시물이 보이지 않으면 먼저 Meta 개발자 콘솔에서 Threads 액세스 토큰을 발급받아 서버 폴더의 .env 파일에 THREADS_ACCESS_TOKEN=실제토큰 형식으로 저장한 다음 서버를 재시작하세요. 토큰을 웹페이지에 붙여넣거나 채팅에 공유하지 마세요.</p>
+        <p class="detail"><a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener noreferrer">Meta 개발자 앱 설정</a> · 필요한 권한: threads_basic, threads_read_replies, threads_manage_replies, threads_content_publish</p>
+      </section>
+      <section class="panel-grid">
+        <div class="panel">
+          <div class="section-head"><div><div class="step">01 / TARGET POST</div><h2>이벤트 게시물 선택</h2></div><span class="pill">필수 설정</span></div>
+          <p class="detail">내 Threads 게시물에서 이벤트 글을 선택해 주세요. 다른 게시물에는 답글을 달지 않습니다.</p>
+          <div class="inline-fields"><label class="field grow"><span>내 Threads 게시물</span><select id="postSelect"><option value="">게시물 불러오기를 눌러주세요</option></select></label><button class="secondary align-bottom" id="loadPosts">게시물 불러오기</button></div>
+          <button class="primary full" id="selectPost">이 게시물을 이벤트 대상으로 설정</button>
+          <div class="selected" id="selectedPost">아직 선택된 게시물이 없습니다.</div>
+        </div>
+        <div class="panel">
+          <div class="section-head"><div><div class="step">02 / FIXED RESPONSE</div><h2>공통 답글 작성</h2></div><span class="pill">500자 이내</span></div>
+          <p class="detail">모든 이벤트 댓글에 아래 문구를 <b>동일하게</b> 발송합니다. 미리 수정해 저장해 주세요.</p>
+          <textarea id="message" rows="10" maxlength="500" spellcheck="false" aria-label="자동 답글 문구"></textarea>
+          <div class="below-field"><span id="charCount">0 / 500자</span><button id="saveSettings" class="secondary">문구·발송 설정 저장</button></div>
+          <div class="limits"><label>하루 최대 (0=제한 없음) <input id="dailyMax" type="number" min="0" max="1000000"/></label><label>한 번에 <input id="batchMax" type="number" min="1" max="20"/></label><label>발송 간격(초) <input id="delaySeconds" type="number" min="3" max="60"/></label></div>
+        </div>
+      </section>
+      <section class="panel auto-panel">
+        <div><div class="step">03 / AUTOMATION CONTROL</div><h2>자동 응답 관리</h2><p class="detail">자동 응답 ON 시점 이후 새로 확인된 댓글에만 자동 발송합니다. 기존 댓글은 아래 목록에서 직접 선택해 발송할 수 있습니다.</p></div>
+        <div class="auto-actions"><span id="autoStatus" class="auto-status">자동 응답 OFF</span><button id="toggleAuto" class="primary">자동 응답 시작</button></div>
+      </section>
+      <section class="panel reply-panel">
+        <div class="section-head"><div><div class="step">04 / INBOX</div><h2>이벤트 댓글 관리</h2></div><button id="refreshComments" class="secondary">새 댓글 확인</button></div>
+        <div class="reply-controls"><label class="checkrow"><input type="checkbox" id="selectAll"/> 대기 댓글 전체 선택</label><div class="action-right"><span id="selectionCount">0개 선택됨</span><button id="sendSelected" class="primary">선택 댓글에 답글 발송</button></div></div>
+        <div class="reply-list" id="replyList"><div class="empty">이벤트 게시물을 선택하고 새 댓글 확인을 눌러 주세요.</div></div>
+        <p class="notes">※ 발송 버튼은 실제 Threads에 답글을 게시합니다. API 응답이 불확실하면 자동 재시도하지 않고 수동 확인하도록 표시됩니다.</p>
+      </section>
+      <section class="panel history-panel">
+        <div class="section-head"><div><div class="step">05 / ACTIVITY LOG</div><h2>최근 발송 기록</h2></div></div>
+        <div id="history" class="history"><div class="empty">아직 발송 기록이 없습니다.</div></div>
+      </section>
+      <footer>KWONGEUL BOOK LAB <span>EVENT REPLY WORKFLOW • THREADS OFFICIAL API</span></footer>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
