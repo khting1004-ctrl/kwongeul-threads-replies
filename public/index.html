@@ -42,7 +42,7 @@
       </section>
       <section class="panel" style="margin-bottom:22px">
         <div class="section-head"><div><div class="step">00 / API CONNECTION</div><h2>Threads 계정 연결</h2></div><button id="verifyConnection" class="secondary">계정 연결 확인</button></div>
-        <p class="detail" id="connectionGuide">게시물이 보이지 않으면 먼저 Meta 개발자 콘솔에서 Threads 액세스 토큰을 발급받아 서버 폴더의 .env 파일에 THREADS_ACCESS_TOKEN=실제토큰 형식으로 저장한 다음 서버를 재시작하세요. 토큰을 웹페이지에 붙여넣거나 채팅에 공유하지 마세요.</p>
+        <p class="detail" id="connectionGuide">Cloudflare Worker의 Settings → Variables and Secrets에서 THREADS_ACCESS_TOKEN을 Secret으로 저장하세요. ADMIN_PASSWORD도 별도의 Secret으로 저장해야 합니다. 토큰이나 비밀번호를 채팅 또는 GitHub에 올리지 마세요.</p>
         <p class="detail"><a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener noreferrer">Meta 개발자 앱 설정</a> · 필요한 권한: threads_basic, threads_read_replies, threads_manage_replies, threads_content_publish</p>
       </section>
       <section class="panel-grid">
