@@ -101,10 +101,16 @@ async function send(env,ids=null,auto=false){
   const allowance=s.dailyMax===0?Number.MAX_SAFE_INTEGER:Math.max(0,s.dailyMax-(todayRow?.n||0));
   const limit=Math.min(20,Math.max(1,s.perBatchMax),allowance);
   if(!limit)return {sent:0,capReached:true};
-  let rows=(await env.DB.prepare("SELECT * FROM replies WHERE status='pending' ORDER BY timestamp LIMIT 1000").all()).results||[];
-  if(ids)rows=rows.filter(x=>ids.includes(x.id));
-  if(auto)rows=rows.filter(x=>s.autoActivatedAt&&x.timestamp>=s.autoActivatedAt);
-  rows=rows.slice(0,limit);
+  let rows;
+  if(auto){
+    // Filter in SQL before LIMIT: old pending comments must not crowd out new eligible comments.
+    if(!s.autoActivatedAt)return {sent:0,reason:'auto activation time missing'};
+    rows=(await env.DB.prepare("SELECT * FROM replies WHERE status='pending' AND timestamp>=? ORDER BY timestamp ASC LIMIT ?").bind(s.autoActivatedAt,limit).all()).results||[];
+  }else{
+    rows=(await env.DB.prepare("SELECT * FROM replies WHERE status='pending' ORDER BY timestamp DESC LIMIT 1000").all()).results||[];
+    if(ids)rows=rows.filter(x=>ids.includes(x.id));
+    rows=rows.slice(0,limit);
+  }
   let sent=0,errors=0;
   for(const x of rows){
     const claimed=await env.DB.prepare("UPDATE replies SET status='sending' WHERE id=? AND status='pending'").bind(x.id).run();
@@ -129,7 +135,9 @@ async function send(env,ids=null,auto=false){
       await env.DB.prepare("UPDATE replies SET status='uncertain',error=? WHERE id=? AND status='sending'").bind(details,x.id).run();
       await env.DB.prepare("INSERT INTO history(reply_id,username,status,at,error) VALUES(?,?,'uncertain',?,?)").bind(x.id,x.username,now(),details).run();
       errors++;
-      break;
+      // One inaccessible comment must not block every other new comment.
+      // Keep the failed row uncertain and never retry it automatically.
+      if(!auto)break;
     }
   }
   return {sent,errors,remaining:Math.max(0,rows.length-sent-errors)};
