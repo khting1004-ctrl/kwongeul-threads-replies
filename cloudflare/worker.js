@@ -67,6 +67,32 @@ async function sync(env){
   await save(env,s);
   return {added,fetched,hasMore,truncated:hasMore};
 }
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function publishReplyContainer(env,creationId){
+  // Meta can return 4279009 before the freshly created container propagates.
+  // Never create a second container when retrying this specific condition.
+  await sleep(2500);
+  for(let attempt=0;attempt<3;attempt++){
+    try{return await graph(env,'/me/threads_publish',{creation_id:creationId},'POST');}
+    catch(e){
+      const propagation=/code 24, subcode 4279009/.test(e.message);
+      if(!propagation)throw e;
+      // A publish error can be ambiguous: stop if Meta already sees the container as published.
+      let status='';
+      try{
+        const container=await graph(env,'/'+creationId,{fields:'status,error_message'});
+        status=String(container.status||'').toUpperCase();
+        if(status==='PUBLISHED')throw Error('컨테이너가 이미 발행된 상태입니다. Threads에서 발송 여부를 확인하세요. (creation_id='+creationId+')');
+        if(status==='ERROR'||status==='EXPIRED')throw Error('컨테이너 상태 '+status+': '+(container.error_message||'발행 불가'));
+      }catch(statusError){
+        if(statusError.message.includes('컨테이너가 이미 발행')||statusError.message.includes('컨테이너 상태 '))throw statusError;
+        // Status may itself be temporarily unavailable. Keep the same creation_id.
+      }
+      if(attempt===2)throw Error(e.message+'; 동일 컨테이너 3회 확인 후 중단 (creation_id='+creationId+')');
+      await sleep(3500*(attempt+1));
+    }
+  }
+}
 async function send(env,ids=null,auto=false){
   const s=await config(env);
   if(auto&&!s.autoEnabled)return {sent:0};
@@ -88,7 +114,7 @@ async function send(env,ids=null,auto=false){
       const draft=await graph(env,'/me/threads',{media_type:'TEXT',text:s.message,reply_to_id:x.id},'POST');
       if(!draft.id)throw Error('Threads 답글 작성 ID가 없습니다.');
       phase='답글 발행';
-      const created=await graph(env,'/me/threads_publish',{creation_id:draft.id},'POST');
+      const created=await publishReplyContainer(env,draft.id);
       if(!created.id)throw Error('Threads 답글 발행 ID가 없습니다.');
       phase='발송 결과 저장';
       // A published reply must never be treated as unsent merely because a history insert fails.
