@@ -159,6 +159,19 @@ $('loadPosts').addEventListener('click',()=>task(async()=>{
 }));
 
 
+
+$('expandKnownShares').addEventListener('click',()=>task(async()=>{
+  const links=['https://www.threads.com/share/BASEmG9L1_/','https://www.threads.com/share/_0Uy9xAXL/'];
+  const out=[];
+  for(const link of links){
+    try{
+      const r=await api('expand-share',{url:link});
+      out.push('공유 주소: '+link+'\n'+(r.canonical?'변환된 원본: '+r.canonical+'\n원본 ID: '+r.id+'\n계정 일치: '+(r.sameAccount?'예':'아니요')+'\nAPI 게시물 인증: '+(r.verified?'성공':'미확인'+(r.apiError?' ('+r.apiError+')':'')):'확인 불가: '+r.reason));
+    }catch(e){out.push('공유 주소: '+link+'\n조회 오류: '+e.message);}
+  }
+  $('shareExpandResult').textContent=out.join('\n\n');
+  toast('기존 공유 링크 검사를 마쳤습니다. 원본 주소 확인 결과를 검토하세요.');
+}));
 $('findOctoberEvent').addEventListener('click',()=>task(async()=>{
   $('octoberEventResult').textContent='@kwongeul 게시물과 답글 기록을 확인하고 있습니다.';
   const result=await api('find-event');
