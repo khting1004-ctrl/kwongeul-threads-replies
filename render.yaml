@@ -2,7 +2,7 @@ services:
   - type: web
     name: kwongeul-threads-replies
     runtime: node
-    plan: starter
+    plan: free
     buildCommand: echo "No external dependencies"
     startCommand: npm start
     healthCheckPath: /health
@@ -15,12 +15,8 @@ services:
       - key: ADMIN_PASSWORD
         sync: false
       - key: DATA_DIR
-        value: /data
+        value: ./data
       - key: POLL_SECONDS
         value: '120'
       - key: TRUST_PROXY
         value: '1'
-    disk:
-      name: threads-replies-state
-      mountPath: /data
-      sizeGB: 1
