@@ -39,33 +39,63 @@ async function sync(env){
   const me=await graph(env,'/me',{fields:'id,username'});
   const fields='id,text,username,timestamp,permalink,is_reply_owned_by_me';
   const path='/'+s.targetPostId+'/replies';
-  let after=s.scanCursor||'';
-  let fetched=0,added=0,hasMore=false;
-  const seen=new Set();
-  for(let i=0;i<4;i++){
-    const page=await graph(env,path,{fields,limit:100,...(after?{after}:{})});
-    const rows=page.data||[];
-    fetched+=rows.length;
-    const inserts=rows.filter(x=>!x.is_reply_owned_by_me&&x.username?.toLowerCase()!==me.username?.toLowerCase());
-    for(let k=0;k<inserts.length;k+=50){
-      const batch=inserts.slice(k,k+50).map(x=>env.DB.prepare("INSERT OR IGNORE INTO replies(id,username,text,timestamp,first_seen_at,status) VALUES(?,?,?,?,?,'pending')").bind(x.id,x.username||'',x.text||'',x.timestamp||now(),now()));
-      if(batch.length){const results=await env.DB.batch(batch);added+=results.reduce((total,r)=>total+(r.meta?.changes||0),0);}
+  let fetched=0,added=0,newestTimestamp=null,backlogError=null;
+  // The Threads replies endpoint defaults to newest first (reverse=true).
+  // Always scan from the front: continuing only an old "after" cursor skips new replies.
+  async function scan(startAfter,maxPages){
+    let after=startAfter||'';
+    const seen=new Set();
+    let more=false;
+    for(let i=0;i<maxPages;i++){
+      const page=await graph(env,path,{fields,reverse:true,limit:100,...(after?{after}:{})});
+      const rows=page.data||[];
+      fetched+=rows.length;
+      for(const x of rows){
+        const ms=Date.parse(String(x.timestamp||''));
+        if(Number.isFinite(ms)&&(!newestTimestamp||ms>Date.parse(newestTimestamp)))newestTimestamp=new Date(ms).toISOString();
+      }
+      const inserts=rows.filter(x=>x.id&&!x.is_reply_owned_by_me&&x.username?.toLowerCase()!==me.username?.toLowerCase());
+      for(let k=0;k<inserts.length;k+=50){
+        const batch=inserts.slice(k,k+50).map(x=>{
+          const ms=Date.parse(String(x.timestamp||''));
+          const timestamp=Number.isFinite(ms)?new Date(ms).toISOString():now();
+          return env.DB.prepare("INSERT OR IGNORE INTO replies(id,username,text,timestamp,first_seen_at,status) VALUES(?,?,?,?,?,'pending')").bind(x.id,x.username||'',x.text||'',timestamp,now());
+        });
+        if(batch.length){
+          const results=await env.DB.batch(batch);
+          added+=results.reduce((total,r)=>total+(r.meta?.changes||0),0);
+        }
+      }
+      const cursor=page.paging?.cursors?.after||(function(){
+        const url=page.paging?.next;
+        if(!url)return '';
+        try{return new URL(url).searchParams.get('after')||'';}catch{return '';}
+      })();
+      if(!rows.length||!cursor||cursor===after||seen.has(cursor)){
+        return {cursor:'',hasMore:false};
+      }
+      seen.add(cursor);
+      after=cursor;
+      more=true;
     }
-    const cursor=page.paging?.cursors?.after || (()=>{
-      const url=page.paging?.next;
-      if(!url)return '';
-      try{return new URL(url).searchParams.get('after')||'';}catch{return '';}
-    })();
-    if(!rows.length||!cursor||cursor===after||seen.has(cursor)){
-      hasMore=false;after='';break;
-    }
-    seen.add(cursor);
-    after=cursor;
-    hasMore=true;
+    return {cursor:after,hasMore:more};
   }
-  s.scanCursor=hasMore?after:'';
+  // Refresh the 200 newest replies on every run, even while older pages are being scanned.
+  const head=await scan('',2);
+  if(head.hasMore){
+    // Continue collecting old comments separately without blocking detection of new ones.
+    const backlogStart=s.scanCursor||head.cursor;
+    try{
+      const backlog=await scan(backlogStart,2);
+      s.scanCursor=backlog.hasMore?backlog.cursor:'';
+    }catch(e){
+      backlogError=e.message;
+      s.scanCursor=''; // A stale cursor must not stop the next fresh scan.
+      console.error('Threads historic comments scan failed:',e);
+    }
+  }else s.scanCursor='';
   await save(env,s);
-  return {added,fetched,hasMore,truncated:hasMore};
+  return {added,fetched,hasMore:!!s.scanCursor,truncated:!!s.scanCursor,newestTimestamp,backlogError};
 }
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function publishReplyContainer(env,creationId){
@@ -263,7 +293,7 @@ async function expandThreadsShare(env,input){
 }
 async function handle(req,env){const u=new URL(req.url),key=req.method+' '+u.pathname;const body=req.method==='POST'?await req.json():{};if(key==='GET /health')return {ok:true};if(key==='GET /api/state')return snapshot(env);if(key==='GET /api/profile'||key==='GET /api/connection'){const p=await graph(env,'/me',{fields:'id,username'});return key.endsWith('connection')?{connected:true,...p}:p;}if(key==='POST /api/expand-share')return expandThreadsShare(env,body.url);if(key==='GET /api/find-event')return findEventOnDate(env);if(key==='POST /api/resolve-link')return resolveLink(env,body.url);if(key==='GET /api/posts'){const result=await pages(env,'/me/threads','id,text,permalink,timestamp,is_reply,shortcode');return {posts:result.data.filter(x=>!x.is_reply),truncated:result.truncated};}if(key==='POST /api/target'){if(!/^\d{5,30}$/.test(String(body.id||'')))throw Error('게시물 ID가 올바르지 않습니다.');const s=await config(env);if(s.targetPostId!==body.id){await env.DB.batch([env.DB.prepare('DELETE FROM replies'),env.DB.prepare('DELETE FROM history')]);s.autoEnabled=false;s.autoActivatedAt=null;s.scanCursor='';}s.targetPostId=body.id;s.targetPermalink=body.permalink||'';await save(env,s);return snapshot(env);}if(key==='POST /api/settings'){const s=await config(env);if(typeof body.message!=='string'||body.message.length<5||[...body.message].length>500)throw Error('답글은 5~500자여야 합니다.');for(const [k,lo,hi] of [['dailyMax',0,1000000],['perBatchMax',1,20],['delaySeconds',3,60]])if(!Number.isInteger(Number(body[k]))||Number(body[k])<lo||Number(body[k])>hi)throw Error('발송 설정을 확인하세요: '+k);Object.assign(s,{message:body.message,dailyMax:Number(body.dailyMax),perBatchMax:Number(body.perBatchMax),delaySeconds:Number(body.delaySeconds)});await save(env,s);return snapshot(env);}if(key==='POST /api/sync')return {...await sync(env),state:await snapshot(env)};if(key==='POST /api/auto'){const s=await config(env);if(body.enabled){await sync(env);s.autoActivatedAt=now();}s.autoEnabled=!!body.enabled;await save(env,s);return snapshot(env);}if(key==='POST /api/send'){if(!Array.isArray(body.ids)||body.ids.length<1||body.ids.length>20)throw Error('발송할 댓글을 선택하세요.');return {result:await send(env,body.ids,false),state:await snapshot(env)};}if(key==='POST /api/mark-reviewed'){if(!['sent','pending'].includes(body.status))throw Error('상태 오류');const row=await env.DB.prepare("UPDATE replies SET status=?,error=NULL WHERE id=? AND status='uncertain'").bind(body.status,body.id).run();if(!row.meta?.changes)throw Error('확인 필요 댓글이 아닙니다.');return snapshot(env);}throw Error('존재하지 않는 API입니다.');}
 export default {async fetch(req,env){const path=new URL(req.url).pathname;if(path==='/health')return json({ok:true});if(!path.startsWith('/api/'))return env.ASSETS?env.ASSETS.fetch(req):new Response('Not found',{status:404});if(!env.ADMIN_PASSWORD||env.ADMIN_PASSWORD.length<12)return json({error:'ADMIN_PASSWORD 미설정'},503);const header=req.headers.get('Authorization')||'';let auth='';try{if(header.startsWith('Basic '))auth=atob(header.slice(6)).split(':').slice(1).join(':');}catch{}if(auth!==env.ADMIN_PASSWORD)return new Response('관리자 인증 필요',{status:401,headers:{'WWW-Authenticate':'Basic realm="Threads Admin"','access-control-allow-origin':'*'}});try{return json(await handle(req,env));}catch(e){return json({error:e.message},400);}},async scheduled(event,env,ctx){ctx.waitUntil((async()=>{
-  const status={lastRunAt:now(),enabled:false,stage:'시작',added:0,sent:0,errors:0,lastError:null};
+  const status={lastRunAt:now(),enabled:false,stage:'시작',added:0,fetched:0,newestTimestamp:null,sent:0,errors:0,lastError:null};
   try{
     const s=await config(env);
     status.enabled=!!s.autoEnabled;
@@ -271,6 +301,9 @@ export default {async fetch(req,env){const path=new URL(req.url).pathname;if(pat
       status.stage='댓글 확인';
       const result=await sync(env);
       status.added=result.added;
+      status.fetched=result.fetched;
+      status.newestTimestamp=result.newestTimestamp;
+      if(result.backlogError)console.error('Old Threads reply cursor failed:',result.backlogError);
       status.stage='답글 발송';
       const outcome=await send(env,null,true);
       status.sent=outcome.sent||0;
