@@ -60,6 +60,14 @@ function render(state, { preserveMessage = false } = {}) {
   $('autoStatus').textContent = on ? '● 자동 응답 실행 중' : '○ 자동 응답 꺼짐';
   $('autoStatus').className = `auto-status${on ? ' on' : ''}`;
   $('toggleAuto').textContent = on ? '자동 응답 중지' : '자동 응답 시작';
+  const cron = state.cronHealth;
+  const health = $('cronHealth');
+  if (!cron) health.textContent = '예약 실행 기록 없음 · Cloudflare 배포 및 Cron Trigger 설정 확인 필요';
+  else {
+    const minutes = Math.round((Date.now() - new Date(cron.lastRunAt).getTime()) / 60000);
+    const stale = !Number.isFinite(minutes) || minutes > 12;
+    health.textContent = '마지막 자동 실행: ' + fmt(cron.lastRunAt) + ' (' + (Number.isFinite(minutes) ? minutes + '분 전' : '시간 확인 불가') + ') · 단계: ' + cron.stage + ' · 신규 수집: ' + cron.added + ' · 발송: ' + cron.sent + ' · 실패: ' + cron.errors + ' · 자동 발송 대기: ' + (state.eligibleAutoPending || 0) + (cron.lastError ? ' · 오류: ' + cron.lastError : '') + (stale ? ' · 예약 작업이 12분 이상 실행되지 않았습니다' : '');
+  }
   selectedIds.forEach(id => { if (!state.replies.some(r => r.id === id && r.status === 'pending')) selectedIds.delete(id); });
   renderReplies();
   renderHistory();
