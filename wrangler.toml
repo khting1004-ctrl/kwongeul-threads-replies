@@ -10,8 +10,7 @@ run_worker_first = true
 [triggers]
 crons = ["*/5 * * * *"]
 
-# D1 database binding must be configured in Cloudflare dashboard as DB.
-# Before deployment, add the D1 binding in Worker Settings > Bindings:
-# Variable name: DB
-# Database: kwongeul-threads-db
-# Never commit API tokens or admin passwords.
+[[d1_databases]]
+binding = "DB"
+database_name = "kwongeul-threads-db"
+database_id = "a2a1df39-83b2-46d7-97de-c51d69fffd72"
