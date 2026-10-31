@@ -66,7 +66,10 @@ function render(state, { preserveMessage = false } = {}) {
   else {
     const minutes = Math.round((Date.now() - new Date(cron.lastRunAt).getTime()) / 60000);
     const stale = !Number.isFinite(minutes) || minutes > 12;
-    health.textContent = '마지막 자동 실행: ' + fmt(cron.lastRunAt) + ' (' + (Number.isFinite(minutes) ? minutes + '분 전' : '시간 확인 불가') + ') · 단계: ' + cron.stage + ' · 신규 수집: ' + cron.added + ' · 발송: ' + cron.sent + ' · 실패: ' + cron.errors + ' · 자동 발송 대기: ' + (state.eligibleAutoPending || 0) + (cron.lastError ? ' · 오류: ' + cron.lastError : '') + (stale ? ' · 예약 작업이 12분 이상 실행되지 않았습니다' : '');
+    const activated = state.settings.autoActivatedAt;
+    const recent = cron.newestTimestamp;
+    const latestBeforeActivation = recent && activated && new Date(recent) < new Date(activated);
+    health.textContent = '마지막 자동 실행: ' + fmt(cron.lastRunAt) + ' (' + (Number.isFinite(minutes) ? minutes + '분 전' : '시간 확인 불가') + ') · 단계: ' + cron.stage + ' · 조회: ' + (cron.fetched ?? '?') + '건 · 신규 수집: ' + cron.added + ' · 발송: ' + cron.sent + ' · 실패: ' + cron.errors + ' · 자동 발송 대기: ' + (state.eligibleAutoPending || 0) + (activated ? ' · 자동 시작: ' + fmt(activated) : '') + (recent ? ' · 마지막 조회 댓글: ' + fmt(recent) : '') + (latestBeforeActivation ? ' · 마지막 댓글이 자동 시작 이전에 작성되어 자동 발송 대상이 아닙니다' : '') + (cron.lastError ? ' · 오류: ' + cron.lastError : '') + (stale ? ' · 예약 작업이 12분 이상 실행되지 않았습니다' : '');
   }
   selectedIds.forEach(id => { if (!state.replies.some(r => r.id === id && r.status === 'pending')) selectedIds.delete(id); });
   renderReplies();
