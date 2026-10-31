@@ -18,6 +18,10 @@ function toast(message, error = false) {
 async function api(path, body) {
   const options = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
   const r = await fetch('/api/' + path, options);
+  const type = r.headers.get('content-type') || '';
+  if (!type.includes('application/json')) {
+    throw new Error('API 서버가 연결되지 않았습니다. 현재 Netlify에는 화면만 배포되어 있습니다. Render에 서버를 배포해야 게시물과 댓글을 불러올 수 있습니다.');
+  }
   const result = await r.json();
   if (!r.ok) throw new Error(result.error || `HTTP ${r.status}`);
   return result;
