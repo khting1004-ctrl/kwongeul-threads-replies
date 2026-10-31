@@ -1,6 +1,7 @@
 const $ = id => document.getElementById(id);
 let current = null;
 let posts = [];
+let resolvedTarget = null;
 let busy = false;
 const selectedIds = new Set();
 const fmt = date => {
@@ -155,6 +156,24 @@ $('loadPosts').addEventListener('click',()=>task(async()=>{
   posts=response.posts;
   filterPosts();
   toast('게시물 '+posts.length+'개 조회 완료. 10. 16. 또는 전자책을 검색하세요.'+(response.truncated?' 일부 오래된 게시물은 API 조회 제한으로 제외될 수 있습니다.':''));
+}));
+
+$('replyLinkInput').value='https://www.threads.com/@gimgyeonghwa173/post/Dej-ykMj4wX';
+$('resolveReplyLink').addEventListener('click',()=>task(async()=>{
+  resolvedTarget=null;
+  $('selectResolvedPost').hidden=true;
+  $('resolvedLinkStatus').textContent='Threads 공식 API에서 원본 게시물 확인 중...';
+  const result=await api('resolve-link',{url:$('replyLinkInput').value.trim()});
+  resolvedTarget=result.target;
+  $('resolvedLinkStatus').textContent='댓글 주소: @'+result.source.username+'\n확인된 원본: @'+result.target.username+' · '+(result.target.timestamp?fmt(result.target.timestamp):'날짜 미확인')+'\n본문: '+(result.target.text||'(텍스트 없음)').slice(0,210)+'\n원본 ID: '+result.target.id+'\n아래 버튼을 눌러야만 이벤트 대상으로 지정됩니다.';
+  $('selectResolvedPost').hidden=false;
+  toast('원본 게시물을 찾았습니다. 내용을 확인한 뒤 지정하세요.');
+}));
+$('selectResolvedPost').addEventListener('click',()=>task(async()=>{
+  if(!resolvedTarget)throw Error('먼저 원본 게시물을 조회하세요.');
+  if(current?.settings.targetPostId&&current.settings.targetPostId!==resolvedTarget.id&&!confirm('이벤트 게시물을 바꾸면 현재 댓글과 발송 기록이 초기화됩니다. 계속할까요?'))return;
+  render(await api('target',{id:resolvedTarget.id,permalink:resolvedTarget.permalink}),{preserveMessage:true});
+  toast('원본 게시물을 이벤트 대상으로 지정했습니다. 아직 답글은 발송하지 않았습니다.');
 }));
 $('selectPost').addEventListener('click', () => task(async () => {
   const post = posts.find(p => p.id === $('postSelect').value);
