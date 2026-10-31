@@ -20,7 +20,7 @@ async function api(path, body) {
   const r = await fetch('/api/' + path, options);
   const type = r.headers.get('content-type') || '';
   if (!type.includes('application/json')) {
-    throw new Error('API 서버가 연결되지 않았습니다. 현재 Netlify에는 화면만 배포되어 있습니다. Render에 서버를 배포해야 게시물과 댓글을 불러올 수 있습니다.');
+    throw new Error('Cloudflare Worker API가 JSON을 반환하지 않았습니다. 배포 상태와 관리자 인증을 확인하세요.');
   }
   const result = await r.json();
   if (!r.ok) throw new Error(result.error || `HTTP ${r.status}`);
@@ -126,19 +126,35 @@ async function reviewStatus(id, status) {
   await task(async () => { render(await api('mark-reviewed', { id, status }), { preserveMessage: true }); toast('상태를 수정했습니다.'); });
 }
 $('message').addEventListener('input', updateCount);
-$('loadPosts').addEventListener('click', () => task(async () => {
-  const profile = await api('profile');
-  const response = await api('posts');
-  posts = response.posts;
-  const select = $('postSelect'); select.replaceChildren();
-  const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = '이벤트 게시물을 선택하세요'; select.append(placeholder);
-  for (const p of posts) {
-    const option = document.createElement('option'); option.value = p.id;
-    option.textContent = `${fmt(p.timestamp)} · ${(p.text || '이미지/동영상 게시물').replace(/\s+/g, ' ').slice(0, 85)}`;
+function filterPosts() {
+  const search=$('postSearch').value.trim().toLowerCase().replace(/\\s+/g,'');
+  const select=$('postSelect');
+  const previous=select.value;
+  const filtered=posts.filter(p=>{
+    const haystack=(fmt(p.timestamp)+' '+(p.text||'')+' '+(p.permalink||'')+' '+(p.shortcode||'')+' '+p.id).toLowerCase().replace(/\\s+/g,'');
+    return !search||haystack.includes(search);
+  });
+  select.replaceChildren();
+  const first=document.createElement('option');
+  first.value=''; first.textContent='게시물을 선택하세요';
+  select.append(first);
+  for(const p of filtered){
+    const option=document.createElement('option');
+    option.value=p.id;
+    option.textContent=fmt(p.timestamp)+' · '+(p.text||'이미지/동영상 게시물').replace(/\\s+/g,' ').slice(0,85);
     select.append(option);
   }
-  if (current?.settings.targetPostId && posts.some(p => p.id === current.settings.targetPostId)) select.value = current.settings.targetPostId;
-  toast(`@${profile.username || '내 계정'} 게시물 ${posts.length}개를 불러왔습니다.`);
+  const chosen=current?.settings.targetPostId;
+  if(filtered.some(p=>p.id===previous))select.value=previous;
+  else if(filtered.some(p=>p.id===chosen))select.value=chosen;
+  $('postSearchStatus').textContent='검색 결과 '+filtered.length+'개 / 조회한 게시물 '+posts.length+'개';
+}
+$('postSearch').addEventListener('input',filterPosts);
+$('loadPosts').addEventListener('click',()=>task(async()=>{
+  const response=await api('posts');
+  posts=response.posts;
+  filterPosts();
+  toast('게시물 '+posts.length+'개 조회 완료. 10. 16. 또는 전자책을 검색하세요.'+(response.truncated?' 일부 오래된 게시물은 API 조회 제한으로 제외될 수 있습니다.':''));
 }));
 $('selectPost').addEventListener('click', () => task(async () => {
   const post = posts.find(p => p.id === $('postSelect').value);
@@ -153,8 +169,17 @@ $('saveSettings').addEventListener('click', () => task(async () => {
   render(await api('settings', limit)); toast('공통 답글 문구와 발송 제한을 저장했습니다.');
 }));
 $('refreshComments').addEventListener('click', () => task(async () => {
-  const response = await api('sync', {}); render(response.state, { preserveMessage: true });
-  toast(`${response.added}개의 새 댓글을 발견했습니다.${response.truncated ? ' 댓글이 많아 일부만 조회되었을 수 있습니다.' : ''}`);
+  let added=0,fetched=0,more=false,passes=0;
+  do {
+    const response=await api('sync', {});
+    render(response.state,{preserveMessage:true});
+    added+=response.added;
+    fetched+=response.fetched;
+    more=!!response.hasMore;
+    passes++;
+    toast('댓글 '+fetched+'개 확인, 신규 '+added+'개 저장'+(more?' · 추가 조회 중':' · 조회 완료'));
+  } while(more&&passes<25);
+  if(more)toast('조회량이 많습니다. 현재 '+fetched+'개 확인. 다시 새 댓글 확인을 누르면 이어서 조회합니다.');
 }));
 $('toggleAuto').addEventListener('click', () => task(async () => {
   const enabled = !current?.settings.autoEnabled;
