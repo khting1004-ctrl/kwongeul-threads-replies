@@ -158,6 +158,23 @@ $('loadPosts').addEventListener('click',()=>task(async()=>{
   toast('게시물 '+posts.length+'개 조회 완료. 10. 16. 또는 전자책을 검색하세요.'+(response.truncated?' 일부 오래된 게시물은 API 조회 제한으로 제외될 수 있습니다.':''));
 }));
 
+
+$('findOctoberEvent').addEventListener('click',()=>task(async()=>{
+  $('octoberEventResult').textContent='@kwongeul 게시물과 답글 기록을 확인하고 있습니다.';
+  const result=await api('find-event');
+  if(result.candidates.length){
+    posts=result.candidates;
+    $('postSearch').value='';
+    filterPosts();
+    const first=posts.find(p=>/전자책|SEO|50페이지|무료/.test(p.text))||posts[0];
+    $('postSelect').value=first.id;
+    $('octoberEventResult').textContent='검색 대상: '+result.range+'\n찾은 원본 '+posts.length+'개 · 내 게시물 '+result.postsCount+'건 · 내 답글 '+result.repliesCount+'건\n\n첫 번째 후보: '+fmt(first.timestamp)+' · '+first.source+'\n'+(first.text||'(텍스트 정보 없음)').slice(0,230)+'\n\n※ 후보 내용을 확인한 후 보라색 [이 게시물을 이벤트 대상으로 설정] 버튼을 눌러주세요.'+(result.partial?'\n일부 페이지는 더 확인이 필요합니다.':'')+(result.problems.length?'\n주의: '+result.problems.join(' / '):'');
+    toast('이벤트 게시물 후보를 찾았습니다. 내용을 확인하고 선택하세요.');
+  }else{
+    $('octoberEventResult').textContent='기간: '+result.range+'\n이 기간에 API로 조회된 내 게시물 '+result.postsCount+'개, 내 답글 '+result.repliesCount+'개입니다.\n소유권이 확인된 이벤트 원본을 찾지 못했습니다.'+(result.unverifiedRoots.length?'\n내 답글에서 발견했지만 조회 권한이 없는 원본 '+result.unverifiedRoots.length+'개가 있습니다.':'')+(result.problems.length?'\n조회 오류: '+result.problems.join(' / '):'')+'\n조회되지 않는 글을 다른 글로 대체해 자동 발송하지 않습니다.';
+    toast('Threads API에서 원본을 찾지 못했습니다. 결과 메시지를 확인하세요.',true);
+  }
+}));
 $('replyLinkInput').value='https://www.threads.com/@gimgyeonghwa173/post/Dej-ykMj4wX';
 $('resolveReplyLink').addEventListener('click',()=>task(async()=>{
   resolvedTarget=null;
