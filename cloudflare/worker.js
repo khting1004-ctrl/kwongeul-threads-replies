@@ -4,7 +4,7 @@ const defaults={targetPostId:'',targetPermalink:'',message:'이벤트 참여 감
 const now=()=>new Date().toISOString();
 async function config(env){const row=await env.DB.prepare("SELECT value FROM config WHERE key='settings'").first();return {...defaults,...(row?JSON.parse(row.value):{})};}
 async function save(env,s){await env.DB.prepare("INSERT INTO config(key,value) VALUES('settings',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify(s)).run();}
-async function graph(env,path,params={},method='GET'){if(!env.THREADS_ACCESS_TOKEN)throw Error('Threads API 토큰을 Cloudflare Secrets에 입력하세요.');let url=new URL(BASE+path);for(const [k,v] of Object.entries(params))if(method==='GET')url.searchParams.set(k,String(v));let opt={method,headers:{Authorization:'Bearer '+env.THREADS_ACCESS_TOKEN}};if(method==='POST'){opt.headers['content-type']='application/x-www-form-urlencoded';opt.body=new URLSearchParams(params);}const resp=await fetch(url,opt);const data=await resp.json();if(!resp.ok)throw Error(data.error?.message||'Threads API '+resp.status);return data;}
+async function graph(env,path,params={},method='GET'){if(!env.THREADS_ACCESS_TOKEN)throw Error('Threads API 토큰을 Cloudflare Secrets에 입력하세요.');let url=new URL(BASE+path);for(const [k,v] of Object.entries(params))if(method==='GET')url.searchParams.set(k,String(v));let opt={method,headers:{Authorization:'Bearer '+env.THREADS_ACCESS_TOKEN}};if(method==='POST'){opt.headers['content-type']='application/x-www-form-urlencoded';opt.body=new URLSearchParams(params);}const resp=await fetch(url,opt);const data=await resp.json();if(!resp.ok){const detail=data.error||{};const codes=[detail.code!=null?'code '+detail.code:'',detail.error_subcode!=null?'subcode '+detail.error_subcode:''].filter(Boolean).join(', ');throw Error((detail.message||'Threads API 요청 실패')+' (HTTP '+resp.status+(codes?', '+codes:'')+')');}return data;}
 async function pages(env,path,fields,maxPages=25){
   let out=[],after='',nextUrl='',more=false;
   const seen=new Set();
@@ -67,8 +67,47 @@ async function sync(env){
   await save(env,s);
   return {added,fetched,hasMore,truncated:hasMore};
 }
-async function send(env,ids=null,auto=false){const s=await config(env);if(auto&&!s.autoEnabled)return {sent:0};const today=now().slice(0,10);const todayRow=await env.DB.prepare("SELECT count(*) AS n FROM history WHERE status='sent' AND substr(at,1,10)=?").bind(today).first();const allowance=s.dailyMax===0?Number.MAX_SAFE_INTEGER:Math.max(0,s.dailyMax-(todayRow?.n||0));const limit=Math.min(20,Math.max(1,s.perBatchMax),allowance);if(!limit)return {sent:0,capReached:true};let rows=(await env.DB.prepare("SELECT * FROM replies WHERE status='pending' ORDER BY timestamp LIMIT 1000").all()).results||[];if(ids)rows=rows.filter(x=>ids.includes(x.id));if(auto)rows=rows.filter(x=>s.autoActivatedAt&&x.timestamp>=s.autoActivatedAt);rows=rows.slice(0,limit);let sent=0,errors=0;for(const x of rows){const claimed=await env.DB.prepare("UPDATE replies SET status='sending' WHERE id=? AND status='pending'").bind(x.id).run();if(!claimed.meta?.changes)continue;try{const draft=await graph(env,'/me/threads',{media_type:'TEXT',text:s.message,reply_to_id:x.id},'POST');if(!draft.id)throw Error('Threads 답글 작성 ID가 없습니다.');const created=await graph(env,'/me/threads_publish',{creation_id:draft.id},'POST');if(!created.id)throw Error('Threads 답글 발행 ID가 없습니다.');await env.DB.prepare("UPDATE replies SET status='sent',sent_at=?,published_id=? WHERE id=?").bind(now(),created.id||'',x.id).run();await env.DB.prepare("INSERT INTO history(reply_id,username,status,at) VALUES(?,?,'sent',?)").bind(x.id,x.username,now()).run();sent++;}catch(e){await env.DB.prepare("UPDATE replies SET status='uncertain',error=? WHERE id=?").bind(e.message,x.id).run();await env.DB.prepare("INSERT INTO history(reply_id,username,status,at,error) VALUES(?,?,'uncertain',?,?)").bind(x.id,x.username,now(),e.message).run();errors++;break;}}return {sent,errors,remaining:Math.max(0,rows.length-sent-errors)};}
-
+async function send(env,ids=null,auto=false){
+  const s=await config(env);
+  if(auto&&!s.autoEnabled)return {sent:0};
+  const today=now().slice(0,10);
+  const todayRow=await env.DB.prepare("SELECT count(*) AS n FROM history WHERE status='sent' AND substr(at,1,10)=?").bind(today).first();
+  const allowance=s.dailyMax===0?Number.MAX_SAFE_INTEGER:Math.max(0,s.dailyMax-(todayRow?.n||0));
+  const limit=Math.min(20,Math.max(1,s.perBatchMax),allowance);
+  if(!limit)return {sent:0,capReached:true};
+  let rows=(await env.DB.prepare("SELECT * FROM replies WHERE status='pending' ORDER BY timestamp LIMIT 1000").all()).results||[];
+  if(ids)rows=rows.filter(x=>ids.includes(x.id));
+  if(auto)rows=rows.filter(x=>s.autoActivatedAt&&x.timestamp>=s.autoActivatedAt);
+  rows=rows.slice(0,limit);
+  let sent=0,errors=0;
+  for(const x of rows){
+    const claimed=await env.DB.prepare("UPDATE replies SET status='sending' WHERE id=? AND status='pending'").bind(x.id).run();
+    if(!claimed.meta?.changes)continue;
+    let phase='답글 생성';
+    try{
+      const draft=await graph(env,'/me/threads',{media_type:'TEXT',text:s.message,reply_to_id:x.id},'POST');
+      if(!draft.id)throw Error('Threads 답글 작성 ID가 없습니다.');
+      phase='답글 발행';
+      const created=await graph(env,'/me/threads_publish',{creation_id:draft.id},'POST');
+      if(!created.id)throw Error('Threads 답글 발행 ID가 없습니다.');
+      phase='발송 결과 저장';
+      // A published reply must never be treated as unsent merely because a history insert fails.
+      await env.DB.prepare("UPDATE replies SET status='sent',sent_at=?,published_id=? WHERE id=?").bind(now(),created.id||'',x.id).run();
+      try{
+        await env.DB.prepare("INSERT INTO history(reply_id,username,status,at) VALUES(?,?,'sent',?)").bind(x.id,x.username,now()).run();
+      }catch(historyError){console.error('Threads reply published; D1 history write failed for '+x.id+': '+historyError.message);}
+      sent++;
+    }catch(e){
+      const details=phase+': '+e.message;
+      // Do not retry automatically; a failed publish response can still be ambiguous.
+      await env.DB.prepare("UPDATE replies SET status='uncertain',error=? WHERE id=? AND status='sending'").bind(details,x.id).run();
+      await env.DB.prepare("INSERT INTO history(reply_id,username,status,at,error) VALUES(?,?,'uncertain',?,?)").bind(x.id,x.username,now(),details).run();
+      errors++;
+      break;
+    }
+  }
+  return {sent,errors,remaining:Math.max(0,rows.length-sent-errors)};
+}
 function decodeThreadsPostUrl(input){
   let url;
   try{url=new URL(String(input||'').trim());}catch{throw Error('Threads 게시물 주소를 입력하세요.');}
