@@ -51,6 +51,12 @@
           <p class="detail">내 Threads 게시물에서 이벤트 글을 선택해 주세요. 다른 게시물에는 답글을 달지 않습니다.</p>
           <div class="field" style="margin-bottom:12px"><span>과거 게시물 찾기 (날짜 · 본문 · 주소)</span><input id="postSearch" type="search" placeholder="예: 10. 16. 또는 전자책" autocomplete="off" aria-label="과거 게시물 검색"/></div><div class="inline-fields"><label class="field grow"><span>내 Threads 게시물</span><select id="postSelect"><option value="">게시물 불러오기를 눌러주세요</option></select></label><button class="secondary align-bottom" id="loadPosts">게시물 불러오기</button></div><p class="detail" id="postSearchStatus" style="margin:9px 0 0">게시물 불러오기를 누른 뒤 10월 16일 또는 전자책으로 검색하세요.</p>
           <div style="margin:14px 0;padding:13px;border:1px solid #403851;border-radius:12px">
+            <div style="font-weight:700;margin-bottom:8px">기존 공유 링크에서 원본 주소 확인</div>
+            <p class="detail" style="margin:0 0 10px">이미 전달된 10월 16일 게시물 공유 링크 두 개를 검사합니다. 원본 글을 자동 지정하거나 댓글을 발송하지 않습니다.</p>
+            <button class="secondary" id="expandKnownShares">기존 공유 링크 2개 확인</button>
+            <p id="shareExpandResult" class="detail" style="white-space:pre-wrap;overflow-wrap:anywhere;margin-top:8px"></p>
+          </div>
+          <div style="margin:14px 0;padding:13px;border:1px solid #403851;border-radius:12px">
             <div style="font-weight:700;margin-bottom:8px">10월 16일 이전 이벤트 글 복구 조회</div>
             <p class="detail" style="margin:0 0 10px">내 게시물 및 내 답글 기록에서 원본 글을 다시 검색합니다. 답글을 발송하지 않습니다.</p>
             <button class="secondary" id="findOctoberEvent">10월 16일 이벤트 글 찾기</button>
