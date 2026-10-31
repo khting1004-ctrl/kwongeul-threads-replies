@@ -105,7 +105,7 @@ async function datedItems(env,path,fields,start,end){
     const next=result.paging?.next||'';
     let cursor=result.paging?.cursors?.after||'';
     if(!cursor&&next){try{cursor=new URL(next).searchParams.get('after')||'';}catch{}}
-    if(!next||!cursor||seen.has(cursor)){truncated=false;break;}
+    if(!cursor||seen.has(cursor)){truncated=false;break;}
     seen.add(cursor);after=cursor;truncated=true;
   }
   return {items:found,truncated};
@@ -144,5 +144,49 @@ async function findEventOnDate(env){
   });
   return {account:me.username,range:'2026-10-15 ~ 2026-10-18 (한국시간)',candidates:ranked.slice(0,80),postsCount,repliesCount,unverifiedRoots:unverifiedRoots.slice(0,8),partial,problems};
 }
-async function handle(req,env){const u=new URL(req.url),key=req.method+' '+u.pathname;const body=req.method==='POST'?await req.json():{};if(key==='GET /health')return {ok:true};if(key==='GET /api/state')return snapshot(env);if(key==='GET /api/profile'||key==='GET /api/connection'){const p=await graph(env,'/me',{fields:'id,username'});return key.endsWith('connection')?{connected:true,...p}:p;}if(key==='GET /api/find-event')return findEventOnDate(env);if(key==='POST /api/resolve-link')return resolveLink(env,body.url);if(key==='GET /api/posts'){const result=await pages(env,'/me/threads','id,text,permalink,timestamp,is_reply,shortcode');return {posts:result.data.filter(x=>!x.is_reply),truncated:result.truncated};}if(key==='POST /api/target'){if(!/^\d{5,30}$/.test(String(body.id||'')))throw Error('게시물 ID가 올바르지 않습니다.');const s=await config(env);if(s.targetPostId!==body.id){await env.DB.batch([env.DB.prepare('DELETE FROM replies'),env.DB.prepare('DELETE FROM history')]);s.autoEnabled=false;s.autoActivatedAt=null;s.scanCursor='';}s.targetPostId=body.id;s.targetPermalink=body.permalink||'';await save(env,s);return snapshot(env);}if(key==='POST /api/settings'){const s=await config(env);if(typeof body.message!=='string'||body.message.length<5||[...body.message].length>500)throw Error('답글은 5~500자여야 합니다.');for(const [k,lo,hi] of [['dailyMax',0,1000000],['perBatchMax',1,20],['delaySeconds',3,60]])if(!Number.isInteger(Number(body[k]))||Number(body[k])<lo||Number(body[k])>hi)throw Error('발송 설정을 확인하세요: '+k);Object.assign(s,{message:body.message,dailyMax:Number(body.dailyMax),perBatchMax:Number(body.perBatchMax),delaySeconds:Number(body.delaySeconds)});await save(env,s);return snapshot(env);}if(key==='POST /api/sync')return {...await sync(env),state:await snapshot(env)};if(key==='POST /api/auto'){const s=await config(env);if(body.enabled){await sync(env);s.autoActivatedAt=now();}s.autoEnabled=!!body.enabled;await save(env,s);return snapshot(env);}if(key==='POST /api/send'){if(!Array.isArray(body.ids)||body.ids.length<1||body.ids.length>20)throw Error('발송할 댓글을 선택하세요.');return {result:await send(env,body.ids,false),state:await snapshot(env)};}if(key==='POST /api/mark-reviewed'){if(!['sent','pending'].includes(body.status))throw Error('상태 오류');const row=await env.DB.prepare("UPDATE replies SET status=?,error=NULL WHERE id=? AND status='uncertain'").bind(body.status,body.id).run();if(!row.meta?.changes)throw Error('확인 필요 댓글이 아닙니다.');return snapshot(env);}throw Error('존재하지 않는 API입니다.');}
+
+async function expandThreadsShare(env,input){
+  let current;
+  try{current=new URL(String(input||'').trim());}catch{throw Error('공유 링크 형식이 올바르지 않습니다.');}
+  const allowed=u=>u.protocol==='https:'&&['threads.com','www.threads.com','threads.net','www.threads.net'].includes(u.hostname);
+  if(!allowed(current)||!/^\/share\/[A-Za-z0-9_-]+\/?$/.test(current.pathname))throw Error('threads.com/share/... 형식의 주소만 사용할 수 있습니다.');
+  const original=current.toString(),hops=[];
+  for(let i=0;i<8;i++){
+    let resp;
+    try{resp=await fetch(current.toString(),{redirect:'manual',headers:{accept:'text/html'}});}
+    catch(e){return {source:original,unresolved:true,reason:'Threads 공유 링크 연결 실패: '+e.message,hops};}
+    const location=resp.headers.get('location');
+    if(resp.status>=300&&resp.status<400&&location){
+      let next;
+      try{next=new URL(location,current);}catch{break;}
+      if(!allowed(next))return {source:original,unresolved:true,reason:'공유 링크가 Threads 외부 주소로 이동해 확인을 중단했습니다.',hops};
+      hops.push(next.pathname);
+      current=next;
+      if(current.pathname.match(/^\/@[A-Za-z0-9_.]+\/post\/[A-Za-z0-9_-]+\/?$/))break;
+      continue;
+    }
+    if(resp.ok){
+      const html=(await resp.text()).slice(0,125000);
+      const canonical=html.match(/<link[^>]*rel=["']canonical["'][^>]*href=["']([^"']+)["']/i)
+        ||html.match(/<meta[^>]*property=["']og:url["'][^>]*content=["']([^"']+)["']/i);
+      if(canonical){
+        try{const found=new URL(canonical[1].replace(/&amp;/g,'&'),current);if(allowed(found))current=found;}catch{}
+      }
+    }
+    break;
+  }
+  const match=current.pathname.match(/^\/@([A-Za-z0-9_.]+)\/post\/([A-Za-z0-9_-]{5,16})\/?$/);
+  if(!match)return {source:original,unresolved:true,reason:'Threads가 공개 게시물 주소로 전환하지 않았습니다. 앱 내부에서만 열리는 게시물일 수 있습니다.',finalPath:current.pathname,hops};
+  const canonical='https://www.threads.com/@'+match[1]+'/post/'+match[2];
+  const decoded=decodeThreadsPostUrl(canonical);
+  const me=await graph(env,'/me',{fields:'id,username'});
+  const sameAccount=decoded.username===String(me.username).toLowerCase();
+  let verified=false,apiError='';
+  if(sameAccount)try{
+    const media=await graph(env,'/'+decoded.id,{fields:'id,username,text,timestamp,permalink,is_reply'});
+    verified=media.username?.toLowerCase()===String(me.username).toLowerCase()&&!media.is_reply;
+  }catch(e){apiError=e.message;}
+  return {source:original,canonical,id:decoded.id,username:match[1],sameAccount,verified,apiError,hops};
+}
+async function handle(req,env){const u=new URL(req.url),key=req.method+' '+u.pathname;const body=req.method==='POST'?await req.json():{};if(key==='GET /health')return {ok:true};if(key==='GET /api/state')return snapshot(env);if(key==='GET /api/profile'||key==='GET /api/connection'){const p=await graph(env,'/me',{fields:'id,username'});return key.endsWith('connection')?{connected:true,...p}:p;}if(key==='POST /api/expand-share')return expandThreadsShare(env,body.url);if(key==='GET /api/find-event')return findEventOnDate(env);if(key==='POST /api/resolve-link')return resolveLink(env,body.url);if(key==='GET /api/posts'){const result=await pages(env,'/me/threads','id,text,permalink,timestamp,is_reply,shortcode');return {posts:result.data.filter(x=>!x.is_reply),truncated:result.truncated};}if(key==='POST /api/target'){if(!/^\d{5,30}$/.test(String(body.id||'')))throw Error('게시물 ID가 올바르지 않습니다.');const s=await config(env);if(s.targetPostId!==body.id){await env.DB.batch([env.DB.prepare('DELETE FROM replies'),env.DB.prepare('DELETE FROM history')]);s.autoEnabled=false;s.autoActivatedAt=null;s.scanCursor='';}s.targetPostId=body.id;s.targetPermalink=body.permalink||'';await save(env,s);return snapshot(env);}if(key==='POST /api/settings'){const s=await config(env);if(typeof body.message!=='string'||body.message.length<5||[...body.message].length>500)throw Error('답글은 5~500자여야 합니다.');for(const [k,lo,hi] of [['dailyMax',0,1000000],['perBatchMax',1,20],['delaySeconds',3,60]])if(!Number.isInteger(Number(body[k]))||Number(body[k])<lo||Number(body[k])>hi)throw Error('발송 설정을 확인하세요: '+k);Object.assign(s,{message:body.message,dailyMax:Number(body.dailyMax),perBatchMax:Number(body.perBatchMax),delaySeconds:Number(body.delaySeconds)});await save(env,s);return snapshot(env);}if(key==='POST /api/sync')return {...await sync(env),state:await snapshot(env)};if(key==='POST /api/auto'){const s=await config(env);if(body.enabled){await sync(env);s.autoActivatedAt=now();}s.autoEnabled=!!body.enabled;await save(env,s);return snapshot(env);}if(key==='POST /api/send'){if(!Array.isArray(body.ids)||body.ids.length<1||body.ids.length>20)throw Error('발송할 댓글을 선택하세요.');return {result:await send(env,body.ids,false),state:await snapshot(env)};}if(key==='POST /api/mark-reviewed'){if(!['sent','pending'].includes(body.status))throw Error('상태 오류');const row=await env.DB.prepare("UPDATE replies SET status=?,error=NULL WHERE id=? AND status='uncertain'").bind(body.status,body.id).run();if(!row.meta?.changes)throw Error('확인 필요 댓글이 아닙니다.');return snapshot(env);}throw Error('존재하지 않는 API입니다.');}
 export default {async fetch(req,env){const path=new URL(req.url).pathname;if(path==='/health')return json({ok:true});if(!path.startsWith('/api/'))return env.ASSETS?env.ASSETS.fetch(req):new Response('Not found',{status:404});if(!env.ADMIN_PASSWORD||env.ADMIN_PASSWORD.length<12)return json({error:'ADMIN_PASSWORD 미설정'},503);const header=req.headers.get('Authorization')||'';let auth='';try{if(header.startsWith('Basic '))auth=atob(header.slice(6)).split(':').slice(1).join(':');}catch{}if(auth!==env.ADMIN_PASSWORD)return new Response('관리자 인증 필요',{status:401,headers:{'WWW-Authenticate':'Basic realm="Threads Admin"','access-control-allow-origin':'*'}});try{return json(await handle(req,env));}catch(e){return json({error:e.message},400);}},async scheduled(event,env,ctx){ctx.waitUntil((async()=>{const s=await config(env);if(s.autoEnabled&&env.THREADS_ACCESS_TOKEN){await sync(env);await send(env,null,true);}})().catch(console.error));}};
